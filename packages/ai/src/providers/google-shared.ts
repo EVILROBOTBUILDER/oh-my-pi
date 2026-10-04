@@ -40,7 +40,7 @@ import type {
 	ThinkingLevel,
 } from "./google-types";
 import { transformMessages } from "./transform-messages";
-import { NON_VISION_IMAGE_PLACEHOLDER } from "./vision-guard";
+import { allowsImageBlockOnWire, NON_VISION_IMAGE_PLACEHOLDER } from "./vision-guard";
 
 export type {
 	Content,
@@ -188,7 +188,6 @@ export function convertMessages<T extends GoogleApiType>(model: Model<T>, contex
 					parts: [{ text: msg.content.toWellFormed() }],
 				});
 			} else {
-				const supportsImages = model.input.includes("image");
 				const parts: Part[] = [];
 				let omittedImages = false;
 				for (const item of msg.content) {
@@ -196,7 +195,7 @@ export function convertMessages<T extends GoogleApiType>(model: Model<T>, contex
 						const text = item.text.toWellFormed();
 						if (text.trim().length === 0) continue;
 						parts.push({ text });
-					} else if (supportsImages) {
+					} else if (allowsImageBlockOnWire(model, item)) {
 						parts.push(convertGoogleImagePart(item));
 					} else {
 						omittedImages = true;
@@ -278,11 +277,13 @@ export function convertMessages<T extends GoogleApiType>(model: Model<T>, contex
 			});
 		} else if (msg.role === "toolResult") {
 			// Extract text and image content
-			const supportsImages = model.input.includes("image");
 			const textContent = msg.content.filter((c): c is TextContent => c.type === "text");
 			const textResult = textContent.map(c => c.text).join("\n");
-			const imageContent = supportsImages ? msg.content.filter((c): c is ImageContent => c.type === "image") : [];
-			const omittedImages = !supportsImages && msg.content.some((c): c is ImageContent => c.type === "image");
+			const allImages = msg.content.filter((c): c is ImageContent => c.type === "image");
+			// Per block: a video's contact sheet ships to a `video`-only model,
+			// a user-attached picture on the same result does not.
+			const imageContent = allImages.filter(c => allowsImageBlockOnWire(model, c));
+			const omittedImages = imageContent.length < allImages.length;
 
 			const hasText = textResult.length > 0;
 			const hasImages = imageContent.length > 0;

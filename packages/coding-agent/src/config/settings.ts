@@ -2627,6 +2627,16 @@ export class Settings {
 			raw["find.enabled"] = raw["find.enabled"] ? "on" : "off";
 		}
 
+		// spelling.autocomplete: boolean -> engine enum. `true` was the macOS
+		// dictionary completion, which the cross-platform `auto` engine replaces.
+		const spellingObj = isRecord(raw.spelling) ? raw.spelling : undefined;
+		if (spellingObj && typeof spellingObj.autocomplete === "boolean") {
+			spellingObj.autocomplete = spellingObj.autocomplete ? "auto" : "off";
+		}
+		if (typeof raw["spelling.autocomplete"] === "boolean") {
+			raw["spelling.autocomplete"] = raw["spelling.autocomplete"] ? "auto" : "off";
+		}
+
 		// statusLine: rename "plan_mode" segment to "mode"
 		const statusLineObj = raw.statusLine as Record<string, unknown> | undefined;
 		if (statusLineObj) {
@@ -3356,12 +3366,20 @@ export class Settings {
 
 		try {
 			await this.#withYamlWriteLock(configPath, async writePath => {
-				// Re-read to preserve external changes. If this instance moved a
-				// malformed file aside, recover from its last in-memory state
-				// rather than recreating the config from only the pending path.
+				// Re-read to preserve external changes.
+				//
+				// If this instance moved a MALFORMED file aside, the quarantined
+				// bytes are by definition unparseable, so they cannot seed the
+				// rebuild — and this process's in-memory layer is not a safe
+				// substitute: it predates any edit the user has since made, so
+				// serializing it wholesale would resurrect keys that were
+				// deliberately removed from the file after we last read it.
+				// Deliberate choice: recover the pending paths only. The
+				// `.broken-*` file retains the user's content for inspection, and
+				// losing in-session settings is recoverable, whereas silently
+				// restoring deleted routing keys is not.
 				const loaded = await this.#loadYamlIfPresentForWriteLocked(configPath, writePath);
-				const current =
-					loaded.settings ?? (this.#quarantinedYamlTargets.has(configPath) ? structuredClone(this.#global) : {});
+				const current = loaded.settings ?? {};
 				let shouldWrite = false;
 				const appliedPaths: string[] = [];
 
@@ -3566,9 +3584,11 @@ export class Settings {
 			await fs.promises.mkdir(path.dirname(projectConfigPath), { recursive: true });
 			await this.#withYamlWriteLock(projectConfigPath, async writePath => {
 				const loaded = await this.#loadYamlIfPresentForWriteLocked(projectConfigPath, writePath);
-				const projectSettings =
-					loaded.settings ??
-					(this.#quarantinedYamlTargets.has(projectConfigPath) ? structuredClone(this.#projectFileSettings) : {});
+				// Same rule as the main config: a quarantined target has no
+				// parseable bytes to recover from, and this process's in-memory
+				// project layer predates edits made since, so serializing it
+				// wholesale would resurrect removed keys. Pending roles only.
+				const projectSettings = loaded.settings ?? {};
 
 				const projectRoles = getByPath(this.#project, ["modelRoles"]);
 				for (const role of modifiedModelRoles) {

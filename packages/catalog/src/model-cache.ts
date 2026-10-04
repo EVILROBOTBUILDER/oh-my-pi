@@ -240,7 +240,32 @@ function migrateCacheSchema(db: Database): void {
 	]);
 }
 
-function isMaterializedModel(value: unknown): value is PersistedModel<Api> {
+/**
+ * Modality allowlist for this build. A model advertising a modality this
+ * version does not know is not corrupt — it is a cache miss.
+ */
+function isKnownInputModality(entry: unknown): boolean {
+	return entry === "text" || entry === "image" || entry === "video";
+}
+
+/**
+ * Structural floor for an input modality: it must be a string, whatever the
+ * value. Keeps a forward-compatible modality from reading as a wrong type.
+ */
+function isAnyInputModality(entry: unknown): boolean {
+	return typeof entry === "string";
+}
+
+/**
+ * Hand-written guard over a persisted model row. `acceptModality` is the
+ * modality policy: the strict pass names every modality this build supports,
+ * the structural pass accepts any string so a newer value stays a cache miss
+ * rather than a delete. Every other field is checked identically by both.
+ */
+function isMaterializedModel(
+	value: unknown,
+	acceptModality: (entry: unknown) => boolean,
+): value is PersistedModel<Api> {
 	if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
 	const model = value as Partial<PersistedModel<Api>>;
 	if (
@@ -257,7 +282,7 @@ function isMaterializedModel(value: unknown): value is PersistedModel<Api> {
 		typeof model.reasoning !== "boolean" ||
 		!Array.isArray(model.input) ||
 		model.input.length === 0 ||
-		model.input.some(input => input !== "text" && input !== "image") ||
+		model.input.some(input => !acceptModality(input)) ||
 		model.headers !== undefined ||
 		!Object.hasOwn(model, "supportsComputerUseConfig") ||
 		(model.supportsComputerUseConfig !== null && typeof model.supportsComputerUseConfig !== "boolean")
@@ -299,13 +324,29 @@ function isMaterializedModel(value: unknown): value is PersistedModel<Api> {
 function parseMaterializedModels<TApi extends Api>(serialized: string): Model<TApi>[] | null {
 	try {
 		const parsed: unknown = JSON.parse(serialized);
-		if (!Array.isArray(parsed) || !parsed.every(isMaterializedModel)) return null;
+		if (!Array.isArray(parsed) || !parsed.every(model => isMaterializedModel(model, isKnownInputModality))) return null;
 		return parsed.map(model => ({
 			...model,
 			supportsComputerUseConfig: model.supportsComputerUseConfig ?? undefined,
 		})) as Model<TApi>[];
 	} catch {
 		return null;
+	}
+}
+
+/**
+ * Whether a serialized `models` payload is corrupt for reasons other than an
+ * unrecognised input modality. The provider-row scrub keys off this instead of
+ * the strict parse, so a modality newer than this build degrades to a cache
+ * miss while genuinely broken payloads are still scrubbed. `secure_delete`
+ * scrubs the rejected payload.
+ */
+function isCorruptModelsPayload(serialized: string): boolean {
+	try {
+		const parsed: unknown = JSON.parse(serialized);
+		return !Array.isArray(parsed) || !parsed.every(model => isMaterializedModel(model, isAnyInputModality));
+	} catch {
+		return true;
 	}
 }
 
@@ -368,11 +409,25 @@ function readRowUncached<TApi extends Api>(
 		const models = parseMaterializedModels<TApi>(row.models);
 		const headerOmittedModelIds = parseModelIds(row.header_omitted_model_ids);
 		const unrestorableHeaderModelIds = parseModelIds(row.unrestorable_header_model_ids);
-		if (models === null || headerOmittedModelIds === null || unrestorableHeaderModelIds === null) {
+		if (headerOmittedModelIds === null || unrestorableHeaderModelIds === null) {
 			// Fail closed on corrupt header provenance: treating malformed
 			// markers as empty could return a model with required credentials
 			// silently absent. secure_delete scrubs the rejected payload.
 			db.run("DELETE FROM model_cache WHERE provider_id = ?", [providerId]);
+			return null;
+		}
+		if (models === null) {
+			// A model this build does not recognise is a cache miss, not
+			// corruption: the strict pass rejects an input modality newer than
+			// the allowlist (`video`, and whatever the next provider ships)
+			// while the row is still structurally sound. Deleting the provider
+			// row there discards every model the provider advertised because of
+			// one forward-compatible value. Re-check under the structural
+			// policy and scrub only payloads broken on their own terms — wrong
+			// types, missing required fields, unparseable JSON.
+			if (isCorruptModelsPayload(row.models)) {
+				db.run("DELETE FROM model_cache WHERE provider_id = ?", [providerId]);
+			}
 			return null;
 		}
 		const ageMs = now() - row.updated_at;

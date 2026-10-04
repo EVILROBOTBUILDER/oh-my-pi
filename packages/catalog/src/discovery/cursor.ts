@@ -400,8 +400,12 @@ function pickModelDisplayName(model: CursorModelDetailsValue, fallbackId: string
  * `input-modalities` in `providers/cursor.kdl` and corrected at build time.
  * Without a reference, families whose native catalogs are multimodal
  * (anthropic, gemini, openai) fall back to id classification.
+ *
+ * Cursor's model-details payload advertises no modality list at all, so the
+ * id-classification branch deliberately stops at image: a reference row is
+ * the only place a clip capability can enter this path.
  */
-export function resolveCursorInput(id: string, referenceInput?: ("text" | "image")[]): ("text" | "image")[] {
+export function resolveCursorInput(id: string, referenceInput?: ("text" | "image" | "video")[]): ("text" | "image" | "video")[] {
 	if (referenceInput) {
 		return referenceInput;
 	}

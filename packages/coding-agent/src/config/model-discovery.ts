@@ -202,25 +202,25 @@ export interface DiscoveryContext {
 
 type OllamaDiscoveredModelMetadata = {
 	reasoning: boolean;
-	input: ("text" | "image")[];
+	input: ("text" | "image" | "video")[];
 	contextWindow?: number;
 };
 
 type LlamaCppDiscoveredServerMetadata = {
 	contextWindow?: number;
-	input?: ("text" | "image")[];
+	input?: ("text" | "image" | "video")[];
 	maxTokens?: "contextWindow";
 };
 
 type DiscoveredModelRuntimeMetadata = {
 	contextWindow?: number;
 	maxTokens?: number;
-	input?: ("text" | "image")[];
+	input?: ("text" | "image" | "video")[];
 };
 
 type LlamaCppModelListEntry = {
 	id: string;
-	input?: ("text" | "image")[];
+	input?: ("text" | "image" | "video")[];
 	runtimeContextWindow?: number;
 	/**
 	 * `--ctx-size` extracted from the entry's `status.args` (rendered CLI arg
@@ -339,7 +339,7 @@ function extractLlamaCppModelContextWindows(
 	};
 }
 
-function extractLlamaCppModelInputCapabilities(item: Record<string, unknown>): ("text" | "image")[] | undefined {
+function extractLlamaCppModelInputCapabilities(item: Record<string, unknown>): ("text" | "image" | "video")[] | undefined {
 	const architecture = item.architecture;
 	if (!isRecord(architecture) || !Array.isArray(architecture.input_modalities)) {
 		return undefined;
@@ -350,7 +350,20 @@ function extractLlamaCppModelInputCapabilities(item: Record<string, unknown>): (
 			modalities.add(modality.toLowerCase());
 		}
 	}
-	return modalities.has("image") ? ["text", "image"] : ["text"];
+	return toDispatchableInputModalities(modalities);
+}
+
+/**
+ * Reduce a provider's advertised modality set to what OMP can dispatch.
+ * `text` is the floor every model carries; `image` and `video` are carried
+ * only when advertised, so a text-only row stays text-only and a
+ * video-capable row reaches a model that accepts clips.
+ */
+function toDispatchableInputModalities(modalities: ReadonlySet<string>): ("text" | "image" | "video")[] {
+	const input: ("text" | "image" | "video")[] = ["text"];
+	if (modalities.has("image")) input.push("image");
+	if (modalities.has("video")) input.push("video");
+	return input;
 }
 
 function parseLlamaCppModelList(payload: unknown): LlamaCppModelListEntry[] {
@@ -416,7 +429,13 @@ function extractLlamaCppConfiguredContextWindow(item: Record<string, unknown>): 
 	return extractLlamaCppCtxSizeFromIni(status.preset);
 }
 
-function extractLlamaCppInputCapabilities(payload: Record<string, unknown>): ("text" | "image")[] | undefined {
+/**
+ * Server-level `modalities` from llama.cpp's `/props`. That object carries
+ * boolean `vision`/`audio` flags with no video member, so this server-wide
+ * signal stays text/image; per-model `architecture.input_modalities` is the
+ * path that can carry a clip capability.
+ */
+function extractLlamaCppInputCapabilities(payload: Record<string, unknown>): ("text" | "image" | "video")[] | undefined {
 	const modalities = payload.modalities;
 	if (!isRecord(modalities)) {
 		return undefined;
@@ -801,20 +820,21 @@ function collectModalities(values: readonly unknown[]): Set<string> {
 }
 
 /**
- * Read image-input support from an OpenAI-compatible `/v1/models` row. Handles
- * direct `input` arrays, Synthetic-style top-level `input_modalities`, and
- * OpenRouter-style `architecture.input_modalities`; returns undefined when none
- * is present so the bundled reference (or the `["text"]` default) can take over.
+ * Read image/video input support from an OpenAI-compatible `/v1/models` row.
+ * Handles direct `input` arrays, Synthetic-style top-level `input_modalities`,
+ * and OpenRouter-style `architecture.input_modalities`; returns undefined when
+ * none is present so the bundled reference (or the `["text"]` default) can take
+ * over.
  */
 function extractOpenAIModelsListInputCapabilities(item: {
 	input?: unknown;
 	input_modalities?: unknown;
 	architecture?: unknown;
-}): ("text" | "image")[] | undefined {
+}): ("text" | "image" | "video")[] | undefined {
 	const architecture = isRecord(item.architecture) ? item.architecture : undefined;
 	const modalities = collectModalities([item.input, item.input_modalities, architecture?.input_modalities]);
 	if (modalities.size === 0) return undefined;
-	return modalities.has("image") ? ["text", "image"] : ["text"];
+	return toDispatchableInputModalities(modalities);
 }
 
 /**

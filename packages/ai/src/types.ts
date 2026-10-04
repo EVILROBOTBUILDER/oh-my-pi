@@ -60,8 +60,7 @@ export type { AssistantMessageEventStream } from "./utils/event-stream";
 
 /**
  * Ceiling on the output-token count omp requests from any OpenAI-family endpoint
- * (openai-responses, azure/xai responses, and openai-completions). Mirrors
- * Anthropic's {@link CLAUDE_CODE_MAX_OUTPUT_TOKENS}.
+ * (openai-responses, azure/xai responses, and openai-completions).
  *
  * Catalog `maxTokens` frequently reflects a model's context window rather than a
  * given upstream's real per-request output cap. OpenRouter, for instance,
@@ -430,20 +429,10 @@ export interface StreamOptions {
 	credentialId?: number;
 	cacheRetention?: CacheRetention;
 	/**
-	 * Keep Anthropic's 5-minute prompt cache warm across bounded idle gaps.
-	 *
-	 * This is an ownership flag, not a general provider default: exactly one
-	 * primary agent loop sharing `providerSessionState` should enable it.
-	 * Side-channel and advisor requests must leave it unset.
-	 */
-	anthropicCacheRefresh?: boolean;
-	/**
 	 * Anthropic preserved-thinking behavior when a signed block no longer matches
 	 * its conversation prefix. Binding-capable models default to `"drop_block"`.
 	 */
 	anthropicPrefixMismatchBehavior?: "drop_block" | "error";
-	/** @internal Marks a replay-only Anthropic request that must use non-streaming `max_tokens: 0`. */
-	anthropicCacheRefreshRequest?: boolean;
 	/**
 	 * Anthropic on-demand compaction (`compact-2026-09-04` beta). Sends a
 	 * top-level `compaction: { type: "summarize", instructions? }` request; the
@@ -639,9 +628,10 @@ export interface StreamOptions {
 	 */
 	fallbackCreditRedemption?: AnthropicFallbackCreditHandle;
 	/**
-	 * Anthropic subscription slow-mode state machine (Claude Code `/low-priority`).
-	 * Consulted only for first-party OAuth `anthropic` requests: stamps
-	 * `anthropic-usage-limit: slow` while active and decides capacity waits.
+	 * Anthropic subscription usage-limit state machine (wrap-up allowance and
+	 * Claude Code's `/low-priority`). Consulted only for first-party OAuth
+	 * `anthropic` requests: stamps `anthropic-usage-limit: slow` while active,
+	 * observes limit headers, and decides capacity waits.
 	 */
 	anthropicSlowMode?: AnthropicSlowModeHooks;
 }
@@ -864,6 +854,17 @@ export interface ImageContent {
 	 * turn differs byte-wise).
 	 */
 	url?: string;
+	/**
+	 * Provenance: this block is a preview rasterized FROM a video clip (the
+	 * read tool's contact sheet or extracted frame, or a CLI video attachment),
+	 * not a picture the user attached. A clip reaches the model as its reduced
+	 * contact sheet, so a model advertising `video` can read it even without
+	 * `image` — the dispatch strip keys on this rather than on the model's
+	 * modality list, which would also exempt user-attached images it cannot
+	 * take. Set only by the video paths; plain string-keyed so it survives
+	 * session persistence, unlike the Symbol attachment-source tag.
+	 */
+	videoPreview?: boolean;
 }
 
 export type ComputerAction =

@@ -4,18 +4,21 @@ import type { Api, ImageContent, Model, TextContent } from "../types";
 export const NON_VISION_IMAGE_PLACEHOLDER = "[image omitted: model does not support vision]";
 export function partitionVisionContent(
 	content: ReadonlyArray<TextContent | ImageContent>,
-	supportsImages: boolean,
+	model: Model<Api>,
 ): {
 	textBlocks: TextContent[];
 	imageBlocks: ImageContent[];
 	omittedImages: boolean;
 } {
 	const textBlocks = content.filter((block): block is TextContent => block.type === "text");
-	const imageBlocks = content.filter((block): block is ImageContent => block.type === "image");
+	const allImages = content.filter((block): block is ImageContent => block.type === "image");
+	// Per block, so a video's contact sheet survives on a `video`-only model
+	// while a user-attached picture on that same message does not.
+	const imageBlocks = allImages.filter(block => allowsImageBlockOnWire(model, block));
 	return {
 		textBlocks,
-		imageBlocks: supportsImages ? imageBlocks : [],
-		omittedImages: !supportsImages && imageBlocks.length > 0,
+		imageBlocks,
+		omittedImages: imageBlocks.length < allImages.length,
 	};
 }
 
@@ -59,6 +62,28 @@ export function sendsImageInputOnWire(model: Model<Api>): boolean {
 	if (model.transport === "pi-native") return model.input.includes("image");
 	if (isGuardedCompletionsTransport(model)) return isOpenAICompletionsVisionSupported(model);
 	return model.input.includes("image");
+}
+
+/**
+ * Whether this image block may go on the wire for `model` — the per-block half
+ * of {@link sendsImageInputOnWire}, for gates that walk content parts.
+ *
+ * A clip reaches the model as its reduced contact sheet, so a model that
+ * advertises `video` reads that sheet without also advertising `image`. The
+ * key is the BLOCK's provenance (`videoPreview`), not the modality list: the
+ * list cannot tell a video's contact sheet from a picture the user attached,
+ * and exempting images wholesale would hand a video-only model a picture it
+ * still rejects. `compat.stripImageInput` means the endpoint 400s on any
+ * `image_url` and overrides both.
+ */
+export function allowsImageBlockOnWire(model: Model<Api>, block: ImageContent): boolean {
+	if (sendsImageInputOnWire(model)) return true;
+	// `compat` is optional and its union members do not all declare
+	// `stripImageInput` (DevinCompat has no such field), so read it structurally
+	// rather than assuming the property exists on every variant.
+	const compatStrip = (model.compat as { stripImageInput?: boolean } | undefined)?.stripImageInput;
+	if (compatStrip) return false;
+	return block.videoPreview === true && model.input.includes("video");
 }
 
 /** True for the transports that encode through the Chat Completions guard. */

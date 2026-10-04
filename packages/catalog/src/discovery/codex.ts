@@ -298,7 +298,7 @@ interface ParsedCodexModelEntry {
 	contextWindow: number | null;
 	maxContextWindow: number | null;
 	reasoning: boolean;
-	input: ("text" | "image")[];
+	input: ("text" | "image" | "video")[];
 	preferWebsockets: boolean;
 	useResponsesLite: boolean;
 	toolMode: boolean;
@@ -437,15 +437,22 @@ function supportsReasoning(defaultReasoningLevel: unknown, supportedReasoningLev
 	return false;
 }
 
-function normalizeInputModalities(inputModalities: unknown): ("text" | "image")[] {
+/**
+ * Map a `/models` row's advertised `input_modalities` onto the canonical set.
+ * A wire that names `video` gets a clip-capable model: the attachment pipeline
+ * reduces the clip to a contact sheet before dispatch. A wire that names
+ * nothing, or names only modalities this build does not dispatch, keeps the
+ * historical text/image default rather than collapsing to a bare `text`.
+ */
+function normalizeInputModalities(inputModalities: unknown): ("text" | "image" | "video")[] {
 	if (!Array.isArray(inputModalities)) {
 		return ["text", "image"];
 	}
 
-	const set = new Set<"text" | "image">();
+	const set = new Set<"text" | "image" | "video">();
 	for (const modality of inputModalities) {
 		const normalized = toNonEmptyString(modality)?.toLowerCase();
-		if (normalized === "text" || normalized === "image") {
+		if (normalized === "text" || normalized === "image" || normalized === "video") {
 			set.add(normalized);
 		}
 	}
@@ -454,7 +461,7 @@ function normalizeInputModalities(inputModalities: unknown): ("text" | "image")[
 		return ["text", "image"];
 	}
 
-	const canonical: ("text" | "image")[] = ["text", "image"];
+	const canonical: ("text" | "image" | "video")[] = ["text", "image", "video"];
 	return canonical.filter(modality => set.has(modality));
 }
 

@@ -14,6 +14,7 @@ import { appleFmAvailability, appleFmCancel, appleFmGenerate } from "@oh-my-pi/p
 import { parseStreamingJson } from "@oh-my-pi/pi-utils";
 import * as AIError from "../error";
 import type {
+	Api,
 	AssistantMessage,
 	Context,
 	ImageContent,
@@ -115,28 +116,28 @@ export async function getAppleFoundationModelsAvailability(): Promise<AppleFound
  */
 function toParts(
 	content: string | ReadonlyArray<TextContent | ImageContent>,
-	supportsImages: boolean,
+	model: Model<Api>,
 	images: { count: number },
 ): Part[] {
 	if (typeof content === "string") return [{ type: "text", text: content }];
-	const { textBlocks, imageBlocks, omittedImages } = partitionVisionContent(content, supportsImages);
+	const { textBlocks, imageBlocks, omittedImages } = partitionVisionContent(content, model);
 	const text = joinTextWithImagePlaceholder(textBlocks.map(block => block.text).join("\n"), omittedImages);
 	const parts: Part[] = text ? [{ type: "text", text }] : [];
 	for (const image of imageBlocks) parts.push({ type: "image", data: image.data, label: `image-${++images.count}` });
 	return parts;
 }
 
-function toEntries(messages: Message[], supportsImages: boolean): Entry[] {
+function toEntries(messages: Message[], model: Model<Api>): Entry[] {
 	const entries: Entry[] = [];
 	const images = { count: 0 };
 	for (const message of messages) {
 		switch (message.role) {
 			case "user":
 			case "developer":
-				entries.push({ kind: "prompt", parts: toParts(message.content, supportsImages, images) });
+				entries.push({ kind: "prompt", parts: toParts(message.content, model, images) });
 				break;
 			case "toolResult": {
-				const parts = toParts(message.content, supportsImages, images);
+				const parts = toParts(message.content, model, images);
 				if (message.isError) parts.unshift({ type: "text", text: "Tool call failed:" });
 				entries.push({ kind: "toolOutput", id: message.toolCallId, name: message.toolName, parts });
 				break;
@@ -189,7 +190,7 @@ function buildRequest(
 		});
 	const instructions = normalizeSystemPrompts(context.systemPrompt).join("\n\n");
 	const request: GenerateRequest = {
-		entries: toEntries(transformMessages(context.messages, model), model.input.includes("image")),
+		entries: toEntries(transformMessages(context.messages, model), model),
 		temperature: options.temperature,
 		maxTokens: options.maxTokens,
 		toolChoice: tools.length > 0 ? mapToolChoice(options.toolChoice) : undefined,

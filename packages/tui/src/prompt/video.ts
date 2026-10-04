@@ -23,7 +23,11 @@ export type VideoPreviewImage = SourceTaggedImage;
 
 /** Create a model-ready contact-sheet image tagged with its original video path. */
 export function createVideoPreviewImage(preview: ImageContent, sourcePath: string): VideoPreviewImage {
-	return tagImageAttachmentSource(preview, sourcePath, "video");
+	// `videoPreview` is the string-keyed half of the provenance: the Symbol tag
+	// above is deliberately dropped before model-bound data, but the dispatch
+	// strip (sdk.ts) needs to tell this contact sheet from a user-attached
+	// picture after the session has round-tripped through JSON.
+	return { ...tagImageAttachmentSource(preview, sourcePath, "video"), videoPreview: true };
 }
 
 /**

@@ -914,9 +914,12 @@ function collapseWithTable<TSpec extends VariantSpecLike>(
 			if (family.suppressWhenOff) thinking.suppressWhenOff = true;
 		}
 
-		const input: ("text" | "image")[] = [];
+		// A collapsed family is as capable as its most capable member, so each
+		// modality is unioned across members in canonical order.
+		const input: ("text" | "image" | "video")[] = [];
 		if (memberSpecs.some(spec => spec.input.includes("text"))) input.push("text");
 		if (memberSpecs.some(spec => spec.input.includes("image"))) input.push("image");
+		if (memberSpecs.some(spec => spec.input.includes("video"))) input.push("video");
 
 		// `cursorMaxMode` gates the `max_mode` request flag. The collapsed row
 		// otherwise inherits `memberSpecs[0]`, so a family whose max-mode member

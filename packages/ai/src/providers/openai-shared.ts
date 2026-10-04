@@ -121,7 +121,12 @@ import type {
 } from "./openai-responses-wire";
 import { applyInferenceHeaders, setHeaderIfAbsent } from "./inference-headers";
 import { transformMessages } from "./transform-messages";
-import { joinTextWithImagePlaceholder, NON_VISION_IMAGE_PLACEHOLDER, partitionVisionContent } from "./vision-guard";
+import {
+	allowsImageBlockOnWire,
+	joinTextWithImagePlaceholder,
+	NON_VISION_IMAGE_PLACEHOLDER,
+	partitionVisionContent,
+} from "./vision-guard";
 
 export interface OpenAIModelIdentity {
 	provider: string;
@@ -1737,7 +1742,7 @@ function convertResponsesInputImage(image: ImageContent, supportsImageDetailOrig
 
 export function convertResponsesInputContent(
 	content: string | Array<TextContent | ImageContent>,
-	supportsImages: boolean,
+	model: Model<Api>,
 	supportsImageDetailOriginal: boolean,
 	escapeControlTokens = false,
 ): ResponseInputContent[] | undefined {
@@ -1752,7 +1757,7 @@ export function convertResponsesInputContent(
 		];
 	}
 
-	const { textBlocks, imageBlocks, omittedImages } = partitionVisionContent(content, supportsImages);
+	const { textBlocks, imageBlocks, omittedImages } = partitionVisionContent(content, model);
 	const normalizedContent: ResponseInputContent[] = [];
 	for (const item of textBlocks) {
 		const raw = item.text.toWellFormed();
@@ -2026,7 +2031,7 @@ export function buildResponsesInput<TApi extends Api>(options: BuildResponsesInp
 			}
 			const content = convertResponsesInputContent(
 				msg.content,
-				options.model.input.includes("image"),
+				options.model,
 				supportsImageDetailOriginal,
 				escapeControlTokens,
 			);
@@ -2381,13 +2386,18 @@ export function encodeResponsesToolResultOutput<TApi extends Api>(
 	model: Model<TApi>,
 	supportsImageDetailOriginal: boolean,
 ): ResponsesToolResultOutputEncoding {
-	const supportsImages = model.input.includes("image");
 	const textResult = toolResult.content
 		.filter((block): block is TextContent => block.type === "text")
 		.map(block => block.text)
 		.join("\n");
-	const hasImages = toolResult.content.some((block): block is ImageContent => block.type === "image");
-	const omittedImages = hasImages && !supportsImages;
+	// Per block, so a video's contact sheet ships to a model advertising
+	// `video` but not `image` while a user picture on the same result does not.
+	const keptBlocks = toolResult.content.filter(
+		(block): block is TextContent | ImageContent =>
+			block.type === "text" || allowsImageBlockOnWire(model, block),
+	);
+	const hasImages = keptBlocks.some((block): block is ImageContent => block.type === "image");
+	const omittedImages = keptBlocks.length < toolResult.content.length;
 	const rawOutput = (
 		omittedImages
 			? joinTextWithImagePlaceholder(textResult, true)
@@ -2403,8 +2413,8 @@ export function encodeResponsesToolResultOutput<TApi extends Api>(
 	// session (#6913). Covers every downstream branch that consumes `output`.
 	const outputText = escapeControlTokens ? escapeHarmonyControlTokens(rawOutput) : rawOutput;
 	const output: string | ResponseInputContent[] =
-		hasImages && supportsImages
-			? toolResult.content.map((block): ResponseInputContent => {
+		hasImages
+			? keptBlocks.map((block): ResponseInputContent => {
 					if (block.type === "image") return convertResponsesInputImage(block, supportsImageDetailOriginal);
 					const text = block.text.toWellFormed();
 					return {

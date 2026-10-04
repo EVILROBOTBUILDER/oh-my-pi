@@ -1132,7 +1132,12 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			if (error instanceof VideoError) throw new ToolError(error.message);
 			throw error;
 		}
-		if (!(this.session.getActiveModel?.()?.input.includes("image") ?? true)) {
+		// A clip reaches the model as its reduced contact sheet, so any model that
+		// accepts frames is enough. `video` is an advertised input modality in its
+		// own right: a model carrying it accepts a clip, and must not have the
+		// video silently degraded to a metadata-only block.
+		const activeModelInput = this.session.getActiveModel?.()?.input;
+		if (activeModelInput && !activeModelInput.includes("image") && !activeModelInput.includes("video")) {
 			const hint =
 				"\n\nIf you want to see the video, read a frame with " +
 				`${resolvedDisplayPath}:<timestamp> (e.g. :0:05) or ${resolvedDisplayPath}:<frame> (e.g. :412).`;
@@ -1181,6 +1186,10 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 				// Fall back to the extracted PNG when resize fails.
 			}
 		}
+		// Provenance for the dispatch strip (sdk.ts): this sheet is rasterized FROM
+		// the clip, so a `video`-accepting model may read it without `image`. Set
+		// after the resize above, which rebuilds the object and drops the flag.
+		image = { ...image, videoPreview: true };
 		const previewBytes = Buffer.from(image.data, "base64").length;
 		if (previewBytes > MAX_IMAGE_SIZE) {
 			throw new ToolError(

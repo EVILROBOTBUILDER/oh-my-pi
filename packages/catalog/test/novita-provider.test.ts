@@ -75,7 +75,9 @@ describe("Novita built-in provider", () => {
 		expect(model?.name).toBe("Kimi K2.7 Code");
 		expect(model?.reasoning).toBe(true);
 		expect(model?.supportsTools).toBe(true);
-		expect(model?.input).toEqual(["text", "image"]);
+		// The wire advertises ["text","image","video"] (see the fixture above);
+		// every advertised modality OMP can dispatch must reach the built model.
+		expect(model?.input).toEqual(["text", "image", "video"]);
 		expect(model?.cost).toEqual({ input: 0.95, output: 4, cacheRead: 0.19, cacheWrite: 0 });
 		expect(model?.contextWindow).toBe(262144);
 		expect(model?.maxTokens).toBe(131072);

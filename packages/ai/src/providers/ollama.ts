@@ -1,3 +1,4 @@
+import { calculateCost } from "@oh-my-pi/pi-catalog/models";
 import { fetchWithRetry, parseStreamingJson, readJsonl } from "@oh-my-pi/pi-utils";
 import * as AIError from "../error";
 import { getEnvApiKey } from "../stream";
@@ -175,7 +176,7 @@ function selectToolsForToolChoice(tools: Tool[] | undefined, toolChoice: ToolCho
 
 function toPlainContent(
 	content: string | ReadonlyArray<TextContent | ImageContent>,
-	supportsImages: boolean,
+	model: Model<Api>,
 ): {
 	content: string;
 	images?: string[];
@@ -183,7 +184,7 @@ function toPlainContent(
 	if (typeof content === "string") {
 		return { content };
 	}
-	const { textBlocks, imageBlocks, omittedImages } = partitionVisionContent(content, supportsImages);
+	const { textBlocks, imageBlocks, omittedImages } = partitionVisionContent(content, model);
 	const text = textBlocks.map(block => block.text).join("\n");
 	return {
 		content: joinTextWithImagePlaceholder(text, omittedImages),
@@ -193,19 +194,19 @@ function toPlainContent(
 
 function convertMessage(
 	message: Message,
-	supportsImages: boolean,
+	model: Model<Api>,
 	developerRole: "system" | "user" = "user",
 ): OllamaMessage {
 	if (message.role === "user") {
-		const converted = toPlainContent(message.content, supportsImages);
+		const converted = toPlainContent(message.content, model);
 		return { role: "user", ...converted };
 	}
 	if (message.role === "developer") {
-		const converted = toPlainContent(message.content, supportsImages);
+		const converted = toPlainContent(message.content, model);
 		return { role: developerRole, ...converted };
 	}
 	if (message.role === "toolResult") {
-		const converted = toPlainContent(message.content, supportsImages);
+		const converted = toPlainContent(message.content, model);
 		return {
 			role: "tool",
 			tool_name: message.toolName,
@@ -251,7 +252,6 @@ function convertMessages(model: Model<"ollama-chat">, context: Context): OllamaM
 	}));
 	const messages: Message[] = [...systemMessages, ...context.messages];
 	const isCloud = model.provider === "ollama-cloud";
-	const supportsImages = model.input.includes("image");
 	const converted = transformMessages(messages, model).map((msg, index) => {
 		// Real `systemPrompt` entries (always emitted first) stay on Ollama's
 		// `system` role. After the static prefix, a developer turn keeps `system`
@@ -263,7 +263,7 @@ function convertMessages(model: Model<"ollama-chat">, context: Context): OllamaM
 		// (llama.cpp, #3456) without demoting mandatory agent reminders.
 		const developerRole =
 			msg.role === "developer" && (index < systemPrompts.length || msg.attribution !== "user") ? "system" : "user";
-		const converted = convertMessage(msg, supportsImages, developerRole);
+		const converted = convertMessage(msg, model, developerRole);
 		// Ollama cloud rejects requests when assistant history messages contain the `thinking`
 		// field — it's valid in model responses but not accepted as a history input. Strip it
 		// to prevent HTTP 400 errors. Local Ollama instances are unaffected.
@@ -710,6 +710,7 @@ const streamOllamaOnce = (
 					output.usage.input = (chunk.prompt_eval_count ?? 0) - output.usage.cacheRead;
 					output.usage.output = chunk.eval_count ?? 0;
 					output.usage.totalTokens = output.usage.input + output.usage.output + output.usage.cacheRead;
+					calculateCost(model, output.usage, output.timestamp);
 				}
 			}
 			if (streamMarkupHealing) {

@@ -13,7 +13,7 @@ import { $env, $which, APP_NAME, compareVersions, isEnoent, VERSION } from "@oh-
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import { withFileLock } from "@oh-my-pi/pi-utils/file-lock";
 import { $ } from "bun";
-import { settings } from "../config/settings";
+import { Settings, settings } from "../config/settings";
 import { theme } from "@oh-my-pi/pi-tui/theme";
 import {
 	isTimeoutError,
@@ -959,7 +959,9 @@ async function addBunCacheActualDir(
 	packageNames: Set<string> | undefined,
 ): Promise<void> {
 	try {
-		const manifest = (await Bun.file(path.join(dirPath, "package.json")).json()) as Partial<
+		// `fs.promises` rather than `Bun.file().json()`: on Windows, Bun's rejected read of a
+		// missing file holds no loop handle, so the loop can drain mid-await (#13470).
+		const manifest = JSON.parse(await fs.promises.readFile(path.join(dirPath, "package.json"), "utf8")) as Partial<
 			Record<"name" | "version", unknown>
 		>;
 		if (typeof manifest.name !== "string" || typeof manifest.version !== "string") return;
@@ -2093,11 +2095,17 @@ function installerHint(): string {
 		: "curl -fsSL https://omp.sh/install | sh -s -- --binary";
 }
 
-/** Persisted channel, or undefined when settings are unavailable (SDK/test embedding without `Settings.init()`). */
+/**
+ * Persisted channel, or undefined when settings are genuinely unavailable (SDK embedding that
+ * never calls `Settings.init`). A read failure is reported, never swallowed silently: an
+ * unreported read is how `update.channel` sat in config.yml looking like an instruction while
+ * the command silently used a different channel.
+ */
 function readPersistedChannel(): UpdateChannel | undefined {
 	try {
 		return cfgUpdateChannel.get(settings);
-	} catch {
+	} catch (error) {
+		console.error(chalk.dim(`Could not read the persisted update channel: ${String(error)}`));
 		return undefined;
 	}
 }
@@ -2119,6 +2127,10 @@ export async function runUpdateCommand(opts: {
 	check: boolean;
 	channel?: UpdateChannel;
 }): Promise<void> {
+	// The channel is a persisted setting, so the settings layer must exist before it is read.
+	// `Settings.init()` is idempotent; without it every read below throws "Settings not
+	// initialized" and the channel silently falls back to "stable".
+	await Settings.init();
 	console.log(chalk.dim(`Current version: ${VERSION}`));
 	const persistedChannel = readPersistedChannel() ?? "stable";
 	const channel = opts.channel ?? persistedChannel;

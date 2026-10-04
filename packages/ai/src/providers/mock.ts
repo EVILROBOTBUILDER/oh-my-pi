@@ -176,7 +176,7 @@ export class MockModel implements Model<MockApi> {
 	readonly provider: string;
 	readonly baseUrl: string;
 	readonly reasoning: boolean;
-	readonly input: ("text" | "image")[] = ["text"];
+	readonly input: ("text" | "image" | "video")[] = ["text"];
 	readonly cost: Model["cost"];
 	readonly contextWindow: number;
 	readonly maxTokens: number;

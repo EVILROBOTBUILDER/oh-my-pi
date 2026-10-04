@@ -144,11 +144,20 @@ function toModelName(value: unknown, fallback: string): string {
 	return trimmed.length > 0 ? trimmed : fallback;
 }
 
-function toInputCapabilities(value: unknown): ("text" | "image")[] {
+/**
+ * Map a provider's advertised `input_modalities` onto the canonical model
+ * input set. Every advertised modality that OMP can dispatch is carried
+ * through: `image` becomes a vision model, and `video` a clip the attachment
+ * pipeline reduces to frames. Both are additive over the `text` floor, so a
+ * model advertising neither stays text-only.
+ */
+function toInputCapabilities(value: unknown): ("text" | "image" | "video")[] {
 	if (!Array.isArray(value)) {
 		return ["text"];
 	}
 	const supportsImage = value.some(item => item === "image");
+	const supportsVideo = value.some(item => item === "video");
+	if (supportsVideo) return supportsImage ? ["text", "image", "video"] : ["text", "video"];
 	return supportsImage ? ["text", "image"] : ["text"];
 }
 
@@ -634,7 +643,7 @@ interface OllamaResolvedMetadata {
 	maxTokens: number;
 	capabilities?: string[];
 	reasoning?: boolean;
-	input?: ("text" | "image")[];
+	input?: ("text" | "image" | "video")[];
 }
 
 interface OllamaShowMetadata {
@@ -642,7 +651,7 @@ interface OllamaShowMetadata {
 	maxTokens?: number;
 	capabilities?: string[];
 	reasoning?: boolean;
-	input?: ("text" | "image")[];
+	input?: ("text" | "image" | "video")[];
 }
 
 function getOllamaContextWindow(modelInfo: Record<string, unknown> | undefined): number | undefined {
@@ -693,10 +702,15 @@ async function fetchOllamaShowMetadata(
 			maxTokens: contextWindow ? OLLAMA_DEFAULT_MAX_TOKENS : undefined,
 			capabilities,
 			reasoning: capabilities ? capabilities.includes("thinking") : undefined,
+			// Ollama's `/api/show` capability vocabulary is
+			// completion/insert/vision/tools/embedding/thinking — it carries no
+			// video flag, so there is nothing to map and Ollama models stay
+			// text/image. The `input` field stays typed for the full union so a
+			// future capability flows through without another signature change.
 			input: capabilities
 				? capabilities.includes("vision")
-					? (["text", "image"] as Array<"text" | "image">)
-					: (["text"] as Array<"text">)
+					? (["text", "image"] as Array<"text" | "image" | "video">)
+					: (["text"] as Array<"text" | "image" | "video">)
 				: undefined,
 		};
 	} catch {
@@ -2254,6 +2268,9 @@ function mapFireworksControlPlaneModel(
 	baseUrl: string,
 ): ModelSpec<"openai-completions"> {
 	const name = toModelName(record.displayName, reference?.name ?? publicModelId);
+	// The Fireworks control plane advertises a single `supportsImageInput`
+	// boolean and no modality list, so there is no video signal to map: this
+	// backend stays text/image.
 	const supportsImage = toBoolean(record.supportsImageInput) === true;
 	const supportsTools = toBoolean(record.supportsTools);
 	const contextWindow = toPositiveNumber(record.contextLength, reference?.contextWindow ?? null);
@@ -2486,7 +2503,7 @@ interface ClinePassLiveCatalogEntry {
 	maxTokens?: number;
 	cost?: ModelSpec<"openai-completions">["cost"];
 	reasoning?: boolean;
-	input?: ("text" | "image")[];
+	input?: ("text" | "image" | "video")[];
 }
 
 interface ClinePassLiveCatalog {
@@ -2512,7 +2529,10 @@ async function fetchClinePassLiveCatalog(fetchImpl: FetchImpl): Promise<ClinePas
 			const pricing = isRecord(raw.pricing) ? raw.pricing : undefined;
 			const topProvider = isRecord(raw.top_provider) ? raw.top_provider : undefined;
 			const params = Array.isArray(raw.supported_parameters) ? raw.supported_parameters : undefined;
-			const modality = String(isRecord(raw.architecture) ? (raw.architecture.modality ?? "") : "");
+			// OpenRouter's flat modality summary ("text+image+video") is the only
+			// signal on a `/v1/models` row; read clip support off it like the
+			// OpenRouter discovery path does.
+			const modality = String(isRecord(raw.architecture) ? (raw.architecture.modality ?? "") : "").toLowerCase();
 			const contextWindow = toPositiveNumber(raw.context_length, 0);
 			const maxTokens = toPositiveNumber(topProvider?.max_completion_tokens, 0);
 			const entry: ClinePassLiveCatalogEntry = {
@@ -2531,7 +2551,15 @@ async function fetchClinePassLiveCatalog(fetchImpl: FetchImpl): Promise<ClinePas
 					: {}),
 				...(params ? { reasoning: params.includes("reasoning") } : {}),
 				...(modality
-					? { input: modality.includes("image") ? (["text", "image"] as const) : (["text"] as const) }
+					? {
+							input: modality.includes("video")
+								? modality.includes("image")
+									? (["text", "image", "video"] as const)
+									: (["text", "video"] as const)
+								: modality.includes("image")
+									? (["text", "image"] as const)
+									: (["text"] as const),
+						}
 					: {}),
 			};
 			byId.set(raw.id, entry);
@@ -2856,6 +2884,8 @@ function mapWaferModel(
 		provider: providerId,
 		baseUrl,
 		reasoning,
+		// Wafer's capability set is a flat `{reasoning, vision, tools}` object
+		// with no video member; text/image is the most it can express.
 		input: vision ? (["text", "image"] as const) : ["text"],
 		cost,
 		contextWindow,
@@ -3257,11 +3287,19 @@ export function openrouterModelManagerOptions(config?: OpenRouterModelManagerCon
 								: [];
 							const thinking = mapOpenRouterThinking(entry);
 							const architecture = isRecord(entry.architecture) ? entry.architecture : undefined;
-							const input: ("text" | "image")[] = Array.isArray(architecture?.input_modalities)
+							// `architecture.input_modalities` is the structured form and wins.
+							// The flat `modality` string ("text+image+video") is the
+							// only signal left when it is absent, so read video off it too.
+							const modalitySummary = String(architecture?.modality ?? "").toLowerCase();
+							const input: ("text" | "image" | "video")[] = Array.isArray(architecture?.input_modalities)
 								? toInputCapabilities(architecture.input_modalities)
-								: String(architecture?.modality ?? "").includes("image")
-									? ["text", "image"]
-									: ["text"];
+								: modalitySummary.includes("video")
+									? modalitySummary.includes("image")
+										? ["text", "image", "video"]
+										: ["text", "video"]
+									: modalitySummary.includes("image")
+										? ["text", "image"]
+										: ["text"];
 							const topProvider = isRecord(entry.top_provider) ? entry.top_provider : undefined;
 
 							const supportsToolChoice = params.includes("tool_choice");
@@ -3401,6 +3439,10 @@ export function openrouterModelManagerOptions(config?: OpenRouterModelManagerCon
 							baseUrl,
 							kind: "video",
 							reasoning: false,
+							// `kind: "video"` is an OUTPUT modality: this row generates a
+							// clip from a text prompt plus optional first-frame image
+							// (image-to-video). Video is never an input to a video
+							// generator, so this row stays text/image by design.
 							input: ["text", "image"],
 							supportsTools: false,
 							// OpenRouter bills video by output second/SKU; ModelCost has no duration axis.
@@ -3931,7 +3973,7 @@ export function kimiCodeModelManagerOptions(
 
 /** Native LM Studio metadata keyed by model id from `/api/v0/models`. */
 export interface LmStudioNativeModelMetadata {
-	input: ("text" | "image")[];
+	input: ("text" | "image" | "video")[];
 	contextWindow?: number;
 }
 
@@ -3956,7 +3998,13 @@ function getLmStudioCapabilityNames(value: unknown): string[] {
 	return value.flatMap(item => (typeof item === "string" ? [item.toLowerCase()] : []));
 }
 
-function getLmStudioNativeInput(entry: Record<string, unknown>): ("text" | "image")[] {
+/**
+ * LM Studio's `/api/v0/models` rows carry a `type` (`vlm`/`llm`) and a flat
+ * `capabilities` string list. That vocabulary has no video member — a local
+ * GGUF vision model exposes an `mmproj` projector for stills, and clips are
+ * not a declared capability — so this path deliberately stays text/image.
+ */
+function getLmStudioNativeInput(entry: Record<string, unknown>): ("text" | "image" | "video")[] {
 	const modelType = typeof entry.type === "string" ? entry.type.toLowerCase() : "";
 	const capabilities = getLmStudioCapabilityNames(entry.capabilities);
 	const supportsImage = modelType === "vlm" || capabilities.includes("vision") || capabilities.includes("image");
@@ -4238,11 +4286,12 @@ export function syntheticModelManagerOptions(
 							// text-only) must not regrow `image` from the bundled reference.
 							// Only when the wire omits them do `supports_vision` and the
 							// reference get a vote.
+							// Synthetic names its modalities flatly, so the shared mapper
+							// reads them without the reference getting a vote — including
+							// `video`, which the reference could never have supplied.
 							input:
 								modalities.length > 0
-									? modalities.includes("image")
-										? ["text", "image"]
-										: ["text"]
+									? toInputCapabilities(modalities)
 									: entry.supports_vision === true || referenceSupportsImage
 										? ["text", "image"]
 										: ["text"],
@@ -4360,6 +4409,10 @@ export function basetenModelManagerOptions(
 				isSupportedBasetenReasoningModel &&
 				(features.includes("reasoning") || features.includes("reasoning_effort"));
 			const supportsTools = features.includes("tools") ? undefined : false;
+			// Baseten names modalities flatly on the wire. `video` rides the same
+			// advertised list as `image`; the reference only backfills `image`,
+			// because a bundled text/image row cannot vouch for clip support.
+			const advertisesVideo = modalities.includes("video");
 			const vision = modalities.includes("image") || (reference?.input.includes("image") ?? false);
 
 			const pricing = raw.pricing ?? {};
@@ -4377,7 +4430,7 @@ export function basetenModelManagerOptions(
 			return {
 				...baseModel,
 				reasoning,
-				input: vision ? ["text", "image"] : ["text"],
+				input: advertisesVideo ? (vision ? ["text", "image", "video"] : ["text", "video"]) : vision ? ["text", "image"] : ["text"],
 				cost,
 				contextWindow,
 				maxTokens,

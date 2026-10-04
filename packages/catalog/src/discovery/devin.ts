@@ -421,7 +421,10 @@ function devinModelSpec(
 	const features = config.modelInfo?.modelFeatures;
 	const supportsImages =
 		(features !== undefined ? features.supportsImages : config.supportsImages) && !DEVIN_IMAGE_BLIND_UIDS.has(uid);
-	const input: ("text" | "image")[] = supportsImages ? ["text", "image"] : ["text"];
+	// Devin's model-features payload is a flat capability set with a single
+	// `supportsImages` boolean — it names no video capability, so there is no
+		// signal to map and the row stays text/image.
+	const input: ("text" | "image" | "video")[] = supportsImages ? ["text", "image"] : ["text"];
 	const compat: DevinCompat = {};
 	if (isAssignModelRouter) compat.modelRouter = true;
 	if (features?.supportsParallelToolCalls === true) compat.supportsParallelToolCalls = true;

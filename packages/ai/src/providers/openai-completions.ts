@@ -12,6 +12,7 @@ import { getEnvApiKey } from "../stream";
 import type {
 	AssistantMessage,
 	Context,
+	ImageContent,
 	Message,
 	MessageAttribution,
 	Model,
@@ -113,6 +114,7 @@ import {
 } from "./openai-shared";
 import { transformMessages } from "./transform-messages";
 import {
+	allowsImageBlockOnWire,
 	isOpenAICompletionsVisionSupported,
 	joinTextWithImagePlaceholder,
 	NON_VISION_IMAGE_PLACEHOLDER,
@@ -2220,7 +2222,7 @@ export function convertMessages(
 							type: "text",
 							text,
 						} satisfies ChatCompletionContentPartText);
-					} else if (supportsImages) {
+					} else if (supportsImages || allowsImageBlockOnWire(model, item)) {
 						content.push({
 							type: "image_url",
 							image_url: {
@@ -2506,8 +2508,12 @@ export function convertMessages(
 					.map(c => (c as TextContent).text)
 					.join("\n");
 				const supportsImages = isOpenAICompletionsVisionSupported(model);
-				const hasImages = toolMsg.content.some(c => c.type === "image");
-				const omittedImages = hasImages && !supportsImages;
+				// Per-block, not per-model: a video's contact sheet ships to a model
+				// that advertises `video` but not `image` (see allowsImageBlockOnWire).
+				const imageContent = toolMsg.content.filter((c): c is ImageContent => c.type === "image");
+				const keptImages = imageContent.filter(c => supportsImages || allowsImageBlockOnWire(model, c));
+				const hasImages = imageContent.length > 0;
+				const omittedImages = keptImages.length < imageContent.length;
 
 				// Always send tool result with text (or placeholder if only images)
 				const hasText = textResult.length > 0;
@@ -2531,16 +2537,14 @@ export function convertMessages(
 				}
 				params.push(toolResultMsg);
 
-				if (hasImages && supportsImages) {
-					for (const block of toolMsg.content) {
-						if (block.type === "image") {
-							imageBlocks.push({
-								type: "image_url",
-								image_url: {
-									url: block.url ?? `data:${block.mimeType};base64,${block.data}`,
-								},
-							});
-						}
+				if (keptImages.length > 0) {
+					for (const block of keptImages) {
+						imageBlocks.push({
+							type: "image_url",
+							image_url: {
+								url: block.url ?? `data:${block.mimeType};base64,${block.data}`,
+							},
+						});
 					}
 				}
 			}

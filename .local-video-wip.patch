@@ -1,0 +1,34 @@
+diff --git a/packages/coding-agent/src/utils/video.ts b/packages/coding-agent/src/utils/video.ts
+index 05f3822df3..408182ea47 100644
+--- a/packages/coding-agent/src/utils/video.ts
++++ b/packages/coding-agent/src/utils/video.ts
+@@ -380,9 +380,26 @@ export interface ContactSheet {
+ 	readonly rows: number;
+ }
+ 
+-const CONTACT_SHEET_THUMBS = 6;
+-const CONTACT_SHEET_COLS = 3;
+-const CONTACT_SHEET_THUMB_WIDTH = 320;
++// 2026-09-27: was 6 thumbs / 3 cols / 320px — a 960x360 sheet, i.e. one frame every
++// 7.5s on a 45s clip at 320px wide. Mark's requirement is that video be usable on
++// the cloud model (opencode-go/space-bunny-free declares
++// `modalities.input: [text, image, video]` in the live catalog). OMP never sends
++// video bytes: it transcodes client-side to a contact sheet and sends that as an
++// image_url block, so THIS constant is the model's entire view of the video.
++// Measured on a real 1280x720 / 45s clip: 6x320 -> 960x360 (316K); 12x480 ->
++// 1920x810 (960K). Both are trivial next to a 1M-token context and a 524K output
++// budget, so the coarse default was buying nothing.
++const CONTACT_SHEET_THUMBS = envInt("OMP_VIDEO_THUMBS", 12);
++const CONTACT_SHEET_COLS = envInt("OMP_VIDEO_COLS", 4);
++const CONTACT_SHEET_THUMB_WIDTH = envInt("OMP_VIDEO_THUMB_WIDTH", 480);
++
++/** Positive-integer env override, falling back when unset or malformed. */
++function envInt(name: string, fallback: number): number {
++	const raw = process.env[name];
++	if (raw === undefined || raw.trim() === "") return fallback;
++	const value = Number.parseInt(raw, 10);
++	return Number.isSafeInteger(value) && value > 0 ? value : fallback;
++}
+ 
+ /**
+  * Build a contact-sheet preview: evenly spaced frames across the duration,

@@ -5022,7 +5022,7 @@ function normalizeInputMessageContent(
 	return (
 		convertResponsesInputContent(
 			content,
-			model.input.includes("image"),
+			model,
 			model.compat.supportsImageDetailOriginal,
 			escapeControlTokens,
 		) ?? []

@@ -606,6 +606,12 @@ function mergeDynamicModel<TApi extends Api>(existingModel: Model<TApi>, dynamic
 	const supportsImage = dynamicInputAuthoritative
 		? dynamicModel.input.includes("image")
 		: existingModel.input.includes("image") || dynamicModel.input.includes("image");
+	// `video` rides the same rule: a clip the attachment pipeline reduces to
+	// frames is an independent capability over the `text` floor, so merging on
+	// `image` alone would silently drop it from every discovered or stencil row.
+	const supportsVideo = dynamicInputAuthoritative
+		? dynamicModel.input.includes("video")
+		: existingModel.input.includes("video") || dynamicModel.input.includes("video");
 	// Synthetic's discovery is authoritative (`dynamicModelsAuthoritative`) and
 	// its per-model `reasoning_parameters.efforts` vocabulary is the route's
 	// whole truth: when the wire advertises only the `none` off-state the
@@ -643,7 +649,7 @@ function mergeDynamicModel<TApi extends Api>(existingModel: Model<TApi>, dynamic
 		...dynamicModel,
 		name: preferDiscoveryName(dynamicModel.name, existingModel.name, dynamicModel.id),
 		reasoning,
-		input: supportsImage ? ["text", "image"] : ["text"],
+		input: mergeInputModalities(supportsImage, supportsVideo),
 		cost: {
 			input: preferDiscoveryCost(dynamicModel.cost.input, existingModel.cost.input),
 			output: preferDiscoveryCost(dynamicModel.cost.output, existingModel.cost.output),
@@ -663,6 +669,21 @@ function mergeDynamicModel<TApi extends Api>(existingModel: Model<TApi>, dynamic
 		compat,
 		contextPromotionTarget: dynamicModel.contextPromotionTarget ?? existingModel.contextPromotionTarget,
 	} as ModelSpec<TApi>);
+}
+
+/**
+ * Rebuild the model input union from its per-modality decisions. `text` is the
+ * floor and `image`/`video` are independent additive capabilities, joined in
+ * canonical order.
+ */
+function mergeInputModalities(
+	supportsImage: boolean,
+	supportsVideo: boolean,
+): ("text" | "image" | "video")[] {
+	const input: ("text" | "image" | "video")[] = ["text"];
+	if (supportsImage) input.push("image");
+	if (supportsVideo) input.push("video");
+	return input;
 }
 
 function preferDiscoveryCost(discoveryCost: number, fallbackCost: number): number {
@@ -763,13 +784,13 @@ function isModelLike(value: unknown): value is ModelSpec<Api> {
 	return true;
 }
 
-function isModelInputArray(value: unknown): value is ("text" | "image")[] {
+function isModelInputArray(value: unknown): value is ("text" | "image" | "video")[] {
 	if (!Array.isArray(value) || value.length === 0) {
 		return false;
 	}
 	for (let i = 0; i < value.length; i++) {
 		const item = value[i];
-		if (item !== "text" && item !== "image") {
+		if (item !== "text" && item !== "image" && item !== "video") {
 			return false;
 		}
 	}

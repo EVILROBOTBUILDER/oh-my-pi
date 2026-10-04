@@ -144,10 +144,10 @@ function parseCost(node: KdlNodeView): TokenCost {
 	return { input, output, cacheRead, cacheWrite };
 }
 
-function parseInput(node: KdlNodeView): ("text" | "image")[] {
-	const input: ("text" | "image")[] = [];
+function parseInput(node: KdlNodeView): ("text" | "image" | "video")[] {
+	const input: ("text" | "image" | "video")[] = [];
 	for (const value of stringList(node)) {
-		if ((value !== "text" && value !== "image") || input.includes(value)) malformed(node);
+		if ((value !== "text" && value !== "image" && value !== "video") || input.includes(value)) malformed(node);
 		input.push(value);
 	}
 	return input;
@@ -166,7 +166,7 @@ function parseModel(node: KdlNodeView, provider: string, defaults: SeedDefaults)
 	const records = API_COMPAT_RECORDS[api] ?? [];
 
 	let reasoning: boolean | undefined;
-	let input: ("text" | "image")[] | undefined;
+	let input: ("text" | "image" | "video")[] | undefined;
 	let cost: TokenCost | undefined;
 	let limits: { contextWindow: number | null; maxTokens: number | null } | undefined;
 	let supportsTools: boolean | undefined;

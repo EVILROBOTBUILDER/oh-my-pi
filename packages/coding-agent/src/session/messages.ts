@@ -802,7 +802,14 @@ function stripImagesFromMessageContent(message: AgentMessage): number {
  * Consecutive placeholder texts collapse into one so a message that was nothing
  * but images does not balloon into a run of identical notes.
  */
-export function replaceLlmImagesWithText(messages: Message[], placeholder: string): Message[] {
+export function replaceLlmImagesWithText(
+	messages: Message[],
+	placeholder: string,
+	/** Keep this image block instead of replacing it — used to exempt video
+	 *  contact sheets from a strip that only a `video`-accepting model should
+	 *  survive. Omitted means every image block is replaced, as before. */
+	keep?: (part: ImageContent) => boolean,
+): Message[] {
 	let out: Message[] | undefined;
 	for (let i = 0; i < messages.length; i++) {
 		const msg = messages[i];
@@ -810,15 +817,18 @@ export function replaceLlmImagesWithText(messages: Message[], placeholder: strin
 		const content = msg.content;
 		if (!Array.isArray(content) || !content.some(part => part.type === "image")) continue;
 		const replaced: (TextContent | ImageContent)[] = [];
+		let replacedAny = false;
 		for (const part of content) {
-			if (part.type !== "image") {
+			if (part.type !== "image" || keep?.(part) === true) {
 				replaced.push(part);
 				continue;
 			}
+			replacedAny = true;
 			const prev = replaced[replaced.length - 1];
 			if (prev?.type === "text" && prev.text === placeholder) continue;
 			replaced.push({ type: "text", text: placeholder });
 		}
+		if (!replacedAny) continue;
 		if (out === undefined) out = messages.slice();
 		out[i] = { ...msg, content: replaced } as Message;
 	}

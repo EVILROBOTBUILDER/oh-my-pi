@@ -256,10 +256,11 @@ function inferReasoningFromGeminiId(id: string): boolean {
 	return false;
 }
 
-function inferInputFromGeminiId(id: string): ("text" | "image")[] {
+function inferInputFromGeminiId(id: string): ("text" | "image" | "video")[] {
 	const normalized = id.toLowerCase();
 	// residue: modality inference for discovery rows without metadata — the
-	// id shape is the only signal; no request policy hangs off this.
+	// id shape is the only signal; no request policy hangs off this. No Gemini
+	// id encodes clip support, so this branch stays text/image.
 	if (normalized.includes("vision") || normalized.includes("image") || normalized.includes("gemini")) {
 		return ["text", "image"];
 	}

@@ -60,8 +60,11 @@ function applyEffectiveFallbackRates(
 }
 
 /** Narrow a compiled `input-modalities` axis value to the model input union. */
-function isInputModalities(value: unknown): value is ("text" | "image")[] {
-	return Array.isArray(value) && value.every(entry => entry === "text" || entry === "image");
+function isInputModalities(value: unknown): value is ("text" | "image" | "video")[] {
+	return (
+		Array.isArray(value) &&
+		value.every(entry => entry === "text" || entry === "image" || entry === "video")
+	);
 }
 
 /**
@@ -82,7 +85,8 @@ function applyCatalogAssignments<TApi extends Api>(model: Model<TApi>, catalog: 
 		webSearch === "anthropic" ||
 		webSearch === "codex" ||
 		webSearch === "xai" ||
-		webSearch === "openrouter"
+		webSearch === "openrouter" ||
+		webSearch === "openai"
 	) {
 		model.webSearch = webSearch;
 	}
@@ -97,6 +101,15 @@ function applyCatalogAssignments<TApi extends Api>(model: Model<TApi>, catalog: 
 	}
 	const priority = catalog.priority;
 	if (typeof priority === "number") model.priority = priority;
+	const promptCache = objectPayload(catalog.promptCache);
+	if (promptCache !== undefined) {
+		const short = numberField(promptCache, "short");
+		const long = numberField(promptCache, "long");
+		model.promptCache = {
+			...(short !== undefined && { short }),
+			...(long !== undefined && { long }),
+		};
+	}
 	const applyPatchToolType = catalog.applyPatchToolType;
 	if (applyPatchToolType === "freeform" || applyPatchToolType === "function") {
 		model.applyPatchToolType = applyPatchToolType;
